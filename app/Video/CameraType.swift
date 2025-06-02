@@ -8,4 +8,5 @@ import Foundation
 public enum CameraType: String, CaseIterable {
     case continuous
     case single
+    case video
 }

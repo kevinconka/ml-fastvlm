@@ -43,7 +43,7 @@ public class CameraController: NSObject {
         }
     }
 
-    public func detatch() {
+    public func detach() {
         sessionQueue.async {
             self.framesContinuation = nil
         }
@@ -176,6 +176,13 @@ public class CameraController: NSObject {
         captureSession.addInput(videoDeviceInput)
 
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "sampleBufferQueue"))
+        
+        // Set pixel format to match video extraction format
+        let outputSettings: [String: Any] = [
+            String(kCVPixelBufferPixelFormatTypeKey): NSNumber(value: kCVPixelFormatType_32BGRA)
+        ]
+        videoOutput.videoSettings = outputSettings
+        
         captureSession.addOutput(videoOutput)
         captureSession.sessionPreset = AVCaptureSession.Preset.hd1920x1080
 

@@ -15,6 +15,15 @@ Demonstrates the performance of **FastVLM** models for on-device, visual questio
 - FastVLM runs on iOS (18.2+) and macOS (15.2+).
 - View Time-To-First-Token (TTFT) with every inference.
 - All predictions are processed privately and securely using on-device models.
+- **Video Mode**: Select and analyze video files with auto-replay functionality.
+
+### Camera Modes
+
+The app supports three camera modes:
+
+- **Continuous**: Real-time analysis of camera feed with automatic frame processing
+- **Single**: Capture and analyze individual frames from the camera
+- **Video**: Select video files from your device for analysis with auto-replay
 
 ### Flexible Prompting
 

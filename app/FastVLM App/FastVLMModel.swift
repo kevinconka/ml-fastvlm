@@ -11,6 +11,12 @@ import MLXLMCommon
 import MLXRandom
 import MLXVLM
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
 @Observable
 @MainActor
 class FastVLMModel {
@@ -111,6 +117,9 @@ class FastVLMModel {
                         evaluationState = .processingPrompt
                     }
 
+                    // Debug: Save the input image before processing
+                    await saveInputImageForDebugging(userInput)
+
                     let llmStart = Date()
                     let input = try await context.processor.prepare(input: userInput)
                     
@@ -186,5 +195,57 @@ class FastVLMModel {
         running = false
         output = ""
         promptTime = ""
+    }
+    
+    private func saveInputImageForDebugging(_ userInput: UserInput) async {
+        guard let imageInput = userInput.images.first else {
+            print("⚠️ Debug: No images in UserInput")
+            return
+        }
+        
+        guard let ciImage = try? imageInput.asCIImage() else {
+            print("❌ VLM Debug: Failed to convert input to CIImage")
+            return
+        }
+        let context = CIContext()
+        
+        // Create a unique filename with timestamp
+        let timestamp = Date().timeIntervalSince1970
+        let filename = "vlm_input_\(Int(timestamp)).png"
+        
+        // Get downloads URL for sandboxed app access
+        let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let fileURL = downloadsURL.appendingPathComponent(filename)
+        
+        // Convert to CGImage and save
+        if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+            #if os(macOS)
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            if let tiffData = nsImage.tiffRepresentation,
+               let imageRep = NSBitmapImageRep(data: tiffData),
+               let pngData = imageRep.representation(using: .png, properties: [:]) {
+                do {
+                    try pngData.write(to: fileURL)
+                    print("🖼️ VLM Debug: Saved input image to \(fileURL.path)")
+                    print("🔍 VLM Debug: Image size: \(cgImage.width)x\(cgImage.height)")
+                } catch {
+                    print("❌ VLM Debug: Failed to save input image: \(error)")
+                }
+            }
+            #else
+            let uiImage = UIImage(cgImage: cgImage)
+            if let pngData = uiImage.pngData() {
+                do {
+                    try pngData.write(to: fileURL)
+                    print("🖼️ VLM Debug: Saved input image to \(fileURL.path)")
+                    print("🔍 VLM Debug: Image size: \(cgImage.width)x\(cgImage.height)")
+                } catch {
+                    print("❌ VLM Debug: Failed to save input image: \(error)")
+                }
+            }
+            #endif
+        } else {
+            print("❌ VLM Debug: Failed to create CGImage for input")
+        }
     }
 }

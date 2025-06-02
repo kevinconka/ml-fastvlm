@@ -7,6 +7,7 @@ import AVFoundation
 import MLXLMCommon
 import SwiftUI
 import Video
+import UniformTypeIdentifiers
 
 // support swift 6
 extension CVImageBuffer: @unchecked @retroactive Sendable {}
@@ -21,11 +22,15 @@ struct ContentView: View {
 
     /// stream of frames -> VideoFrameView, see distributeVideoFrames
     @State private var framesToDisplay: AsyncStream<CVImageBuffer>?
+    @State private var streamID = UUID()
+    @State private var isStreamReady = false
 
     @State private var prompt = "Describe the image in English."
     @State private var promptSuffix = "Output should be brief, about 15 words or less."
 
     @State private var isShowingInfo: Bool = false
+    @State private var isShowingVideoPicker: Bool = false
+    @State private var selectedVideoURL: URL?
 
     @State private var selectedCameraType: CameraType = .continuous
     @State private var isEditingPrompt: Bool = false
@@ -66,18 +71,65 @@ struct ContentView: View {
                         // Prevent macOS from adding a text label for the picker
                         .labelsHidden()
                         .pickerStyle(.segmented)
-                        .onChange(of: selectedCameraType) { _, _ in
+                        .onChange(of: selectedCameraType) { _, newType in
                             // Cancel any in-flight requests when switching modes
                             model.cancel()
+                            
+                            // Reset stream state
+                            isStreamReady = false
+                            
+                            // Handle camera lifecycle when switching modes
+                            if newType == .video {
+                                camera.stop()
+                            } else {
+                                camera.start()
+                            }
                         }
 
-                        if let framesToDisplay {
+                        if selectedCameraType == .video {
+                            // Video mode - show video player or file picker
+                            VStack {
+                                if selectedVideoURL != nil, let framesToDisplay {
+                                    VideoFrameView(
+                                        frames: framesToDisplay,
+                                        cameraType: selectedCameraType,
+                                        action: { frame in
+                                            processSingleFrame(frame)
+                                        })
+                                        .aspectRatio(16/9, contentMode: .fit)
+                                        #if os(macOS)
+                                        .frame(maxWidth: 750)
+                                        #endif
+                                        .overlay(alignment: .topTrailing) {
+                                            Button("Change Video") {
+                                                isShowingVideoPicker = true
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .padding()
+                                        }
+                                } else {
+                                    VStack {
+                                        Image(systemName: "video.badge.plus")
+                                            .font(.largeTitle)
+                                            .foregroundColor(.secondary)
+                                        Text("Select a video file")
+                                            .foregroundColor(.secondary)
+                                        Button("Choose Video") {
+                                            isShowingVideoPicker = true
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                    }
+                                    .frame(height: 200)
+                                }
+                            }
+                        } else if let framesToDisplay, isStreamReady {
                             VideoFrameView(
                                 frames: framesToDisplay,
                                 cameraType: selectedCameraType,
                                 action: { frame in
                                     processSingleFrame(frame)
                                 })
+                                .id(streamID)  // Restart when stream changes
                                 // Because we're using the AVCaptureSession preset
                                 // `.vga640x480`, we can assume this aspect ratio
                                 .aspectRatio(4/3, contentMode: .fit)
@@ -198,7 +250,10 @@ struct ContentView: View {
             .padding()
             #endif
             .task {
-                camera.start()
+                // Only start camera if not in video mode
+                if selectedCameraType != .video {
+                    camera.start()
+                }
             }
             .task {
                 await model.load()
@@ -225,6 +280,18 @@ struct ContentView: View {
                 }
 
                 await distributeVideoFrames()
+            }
+            
+            // Restart video distribution when video URL changes
+            .task(id: selectedVideoURL) {
+                if Task.isCancelled {
+                    return
+                }
+                
+                if selectedCameraType == .video && selectedVideoURL != nil {
+                    print("🔄 Video URL changed, restarting distribution...")
+                    await distributeVideoFrames()
+                }
             }
 
             .navigationTitle("FastVLM")
@@ -276,6 +343,21 @@ struct ContentView: View {
             }
             .sheet(isPresented: $isShowingInfo) {
                 InfoView()
+            }
+            .fileImporter(
+                isPresented: $isShowingVideoPicker,
+                allowedContentTypes: [.movie, .video],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let files):
+                    if let fileURL = files.first {
+                        print("🎬 Video selected: \(fileURL.lastPathComponent)")
+                        selectedVideoURL = fileURL
+                    }
+                case .failure(let error):
+                    print("❌ Error selecting video: \(error)")
+                }
             }
         }
     }
@@ -377,16 +459,38 @@ struct ContentView: View {
     }
 
     func distributeVideoFrames() async {
-        // attach a stream to the camera -- this code will read this
-        let frames = AsyncStream<CMSampleBuffer>(bufferingPolicy: .bufferingNewest(1)) {
-            camera.attach(continuation: $0)
+        print("🔧 distributeVideoFrames() called, selectedCameraType: \(selectedCameraType)")
+        
+        // First, completely clear the existing stream
+        await MainActor.run {
+            self.framesToDisplay = nil
+            self.isStreamReady = false
+            print("🔧 Cleared old stream")
         }
-
+        
+        // Wait a moment to ensure UI updates
+        try? await Task.sleep(for: .milliseconds(50))
+        
+        // Create the streams at the beginning
         let (framesToDisplay, framesToDisplayContinuation) = AsyncStream.makeStream(
             of: CVImageBuffer.self,
             bufferingPolicy: .bufferingNewest(1)
         )
-        self.framesToDisplay = framesToDisplay
+        
+        // Update the main actor with the new stream
+        await MainActor.run {
+            self.framesToDisplay = framesToDisplay
+            self.streamID = UUID()  // Force VideoFrameView to restart
+            print("🔧 Updated framesToDisplay stream with new ID: \(self.streamID)")
+        }
+        
+        // Small delay to ensure stream is properly connected
+        try? await Task.sleep(for: .milliseconds(10))
+        
+        await MainActor.run {
+            self.isStreamReady = true  // Show VideoFrameView with new stream
+            print("🔧 Stream is ready for VideoFrameView")
+        }
 
         // Only create analysis stream if in continuous mode
         let (framesToAnalyze, framesToAnalyzeContinuation) = AsyncStream.makeStream(
@@ -394,36 +498,190 @@ struct ContentView: View {
             bufferingPolicy: .bufferingNewest(1)
         )
 
-        // set up structured tasks (important -- this means the child tasks
-        // are cancelled when the parent is cancelled)
-        async let distributeFrames: () = {
-            for await sampleBuffer in frames {
-                if let frame = sampleBuffer.imageBuffer {
-                    framesToDisplayContinuation.yield(frame)
-                    // Only send frames for analysis in continuous mode
-                    if await selectedCameraType == .continuous {
-                        framesToAnalyzeContinuation.yield(frame)
+        if selectedCameraType == .video, let videoURL = selectedVideoURL {
+            print("📹 Starting video frame distribution for: \(videoURL.lastPathComponent)")
+            // Video mode - extract frames from video
+            await distributeVideoFileFrames(
+                framesToDisplayContinuation: framesToDisplayContinuation,
+                framesToAnalyzeContinuation: framesToAnalyzeContinuation,
+                videoURL: videoURL
+            )
+        } else {
+            print("📷 Starting camera frame distribution")
+            // Camera mode - attach a stream to the camera
+            let frames = AsyncStream<CMSampleBuffer>(bufferingPolicy: .bufferingNewest(1)) {
+                camera.attach(continuation: $0)
+            }
+            
+            // set up structured tasks (important -- this means the child tasks
+            // are cancelled when the parent is cancelled)
+            async let distributeFrames: () = {
+                for await sampleBuffer in frames {
+                    if let frame = sampleBuffer.imageBuffer {
+                        framesToDisplayContinuation.yield(frame)
+                        // Only send frames for analysis in continuous mode
+                        if await selectedCameraType == .continuous {
+                            framesToAnalyzeContinuation.yield(frame)
+                        }
                     }
                 }
-            }
 
-            // detach from the camera controller and feed to the video view
-            await MainActor.run {
-                self.framesToDisplay = nil
-                self.camera.detatch()
-            }
+                // detach from the camera controller and feed to the video view
+                await MainActor.run {
+                    self.framesToDisplay = nil
+                    self.camera.detach()
+                }
 
+                framesToDisplayContinuation.finish()
+                framesToAnalyzeContinuation.finish()
+            }()
+
+            // Only analyze frames if in continuous mode
+            if selectedCameraType == .continuous {
+                async let analyze: () = analyzeVideoFrames(framesToAnalyze)
+                await distributeFrames
+                await analyze
+            } else {
+                await distributeFrames
+            }
+        }
+    }
+    
+    func distributeVideoFileFrames(
+        framesToDisplayContinuation: AsyncStream<CVImageBuffer>.Continuation,
+        framesToAnalyzeContinuation: AsyncStream<CVImageBuffer>.Continuation,
+        videoURL: URL
+    ) async {
+        print("🎥 Setting up video asset for: \(videoURL.lastPathComponent)")
+        
+        // Start accessing security-scoped resource (required for sandboxed apps)
+        let accessing = videoURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessing {
+                videoURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
+        let asset = AVAsset(url: videoURL)
+        let imageGenerator = AVAssetImageGenerator(asset: asset)
+        imageGenerator.requestedTimeToleranceAfter = .zero
+        imageGenerator.requestedTimeToleranceBefore = .zero
+        imageGenerator.appliesPreferredTrackTransform = true
+        
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
+            print("❌ Failed to load video tracks")
             framesToDisplayContinuation.finish()
             framesToAnalyzeContinuation.finish()
-        }()
-
-        // Only analyze frames if in continuous mode
-        if selectedCameraType == .continuous {
+            return
+        }
+        
+        print("✅ Found video track: \(track)")
+        
+        do {
+            let duration = try await asset.load(.duration)
+            let timeRange = try await track.load(.timeRange)
+            let frameRate = try await track.load(.nominalFrameRate)
+            
+            print("✅ Video loaded - Duration: \(CMTimeGetSeconds(duration))s, Frame rate: \(frameRate)fps")
+            
+            let frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
+            var currentTime = timeRange.start
+            
+            // Create analysis stream for continuous analysis
+            let (framesToAnalyze, framesToAnalyzeContinuation2) = AsyncStream.makeStream(
+                of: CVImageBuffer.self,
+                bufferingPolicy: .bufferingNewest(1)
+            )
+            
+            // Start analysis task in parallel
             async let analyze: () = analyzeVideoFrames(framesToAnalyze)
-            await distributeFrames
+            
+            print("🔄 Starting video frame extraction loop...")
+            var frameCount = 0
+            
+            // Extract and distribute frames
+            async let extractFrames: () = {
+                // Loop the video continuously
+                while !Task.isCancelled {
+                    if currentTime >= CMTimeAdd(timeRange.start, duration) {
+                        currentTime = timeRange.start // Loop back to start
+                        print("🔁 Video looped back to start")
+                    }
+                    
+                    do {
+                        let (cgImage, _) = try await imageGenerator.image(at: currentTime)
+                        
+                        // Convert CGImage to CVImageBuffer
+                        var pixelBuffer: CVPixelBuffer?
+                        let options: [String: Any] = [
+                            kCVPixelBufferCGImageCompatibilityKey as String: true,
+                            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+                        ]
+                        
+                        let status = CVPixelBufferCreate(
+                            kCFAllocatorDefault,
+                            cgImage.width,
+                            cgImage.height,
+                            kCVPixelFormatType_32BGRA,
+                            options as CFDictionary,
+                            &pixelBuffer
+                        )
+                        
+                        if status == kCVReturnSuccess, let pixelBuffer = pixelBuffer {
+                            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+                            let context = CGContext(
+                                data: CVPixelBufferGetBaseAddress(pixelBuffer),
+                                width: cgImage.width,
+                                height: cgImage.height,
+                                bitsPerComponent: 8,
+                                bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+                            )
+                            
+                            context?.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+                            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+                            
+                            framesToDisplayContinuation.yield(pixelBuffer)
+                            framesToAnalyzeContinuation2.yield(pixelBuffer)
+                            
+                            frameCount += 1
+                            if frameCount % 30 == 0 {  // Log every 30 frames
+                                print("📊 Processed \(frameCount) frames")
+                                print("📺 Yielded frame \(frameCount) to display stream")
+                            }
+                        } else {
+                            print("⚠️ Failed to create pixel buffer, status: \(status)")
+                        }
+                        
+                        currentTime = CMTimeAdd(currentTime, frameDuration)
+                        
+                        // Control frame rate
+                        try await Task.sleep(for: FRAME_DELAY)
+                        
+                    } catch {
+                        print("⚠️ Error extracting frame at time \(CMTimeGetSeconds(currentTime)): \(error)")
+                        currentTime = CMTimeAdd(currentTime, frameDuration)
+                    }
+                }
+                
+                print("🛑 Video frame extraction stopped")
+                
+                await MainActor.run {
+                    self.framesToDisplay = nil
+                }
+                
+                framesToDisplayContinuation.finish()
+                framesToAnalyzeContinuation2.finish()
+            }()
+            
+            await extractFrames
             await analyze
-        } else {
-            await distributeFrames
+            
+        } catch {
+            print("❌ Error loading video properties: \(error)")
+            framesToDisplayContinuation.finish()
+            framesToAnalyzeContinuation.finish()
         }
     }
 

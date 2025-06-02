@@ -82,11 +82,20 @@ public struct VideoFrameView: View {
             if Task.isCancelled {
                 return
             }
+            print("🖼️ VideoFrameView: Starting to listen for frames...")
+            var frameCount = 0
             for await frame in frames {
                 if !hold {
                     videoFrame = frame
+                    frameCount += 1
+                    if frameCount % 30 == 0 {
+                        print("🖼️ VideoFrameView: Displayed \(frameCount) frames")
+                    }
+                } else {
+                    print("🖼️ VideoFrameView: Frame skipped (hold=true)")
                 }
             }
+            print("🖼️ VideoFrameView: Frame stream ended")
         }
         .onChange(of: cameraType) { _, newType in
             // No matter what, when the user switches to .continuous,
@@ -114,7 +123,7 @@ public struct VideoFrameView: View {
     /// Internal view to display a CVImageBuffer
     private struct _ImageView: UIViewRepresentable {
 
-        let image: Any
+        let image: CVImageBuffer
         var gravity = CALayerContentsGravity.resizeAspectFill
 
         func makeUIView(context: Context) -> UIView {
@@ -124,13 +133,21 @@ public struct VideoFrameView: View {
         }
 
         func updateUIView(_ uiView: UIView, context: Context) {
-            uiView.layer.contents = image
+            // Convert CVImageBuffer to CGImage
+            let ciImage = CIImage(cvPixelBuffer: image)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                uiView.layer.contents = cgImage
+                print("🖼️ _ImageView: Successfully rendered CGImage")
+            } else {
+                print("⚠️ _ImageView: Failed to create CGImage from CVImageBuffer")
+            }
         }
     }
 #else
     private struct _ImageView: NSViewRepresentable {
 
-        let image: Any
+        let image: CVImageBuffer
         var gravity = CALayerContentsGravity.resizeAspectFill
 
         func makeNSView(context: Context) -> NSView {
@@ -141,8 +158,15 @@ public struct VideoFrameView: View {
         }
 
         func updateNSView(_ uiView: NSView, context: Context) {
-            uiView.layer?.contents = image
+            // Convert CVImageBuffer to CGImage
+            let ciImage = CIImage(cvPixelBuffer: image)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                uiView.layer?.contents = cgImage
+                print("🖼️ _ImageView: Successfully rendered CGImage")
+            } else {
+                print("⚠️ _ImageView: Failed to create CGImage from CVImageBuffer")
+            }
         }
     }
-
 #endif
