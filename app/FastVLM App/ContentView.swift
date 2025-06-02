@@ -459,13 +459,10 @@ struct ContentView: View {
     }
 
     func distributeVideoFrames() async {
-        print("🔧 distributeVideoFrames() called, selectedCameraType: \(selectedCameraType)")
-        
         // First, completely clear the existing stream
         await MainActor.run {
             self.framesToDisplay = nil
             self.isStreamReady = false
-            print("🔧 Cleared old stream")
         }
         
         // Wait a moment to ensure UI updates
@@ -481,7 +478,6 @@ struct ContentView: View {
         await MainActor.run {
             self.framesToDisplay = framesToDisplay
             self.streamID = UUID()  // Force VideoFrameView to restart
-            print("🔧 Updated framesToDisplay stream with new ID: \(self.streamID)")
         }
         
         // Small delay to ensure stream is properly connected
@@ -489,7 +485,6 @@ struct ContentView: View {
         
         await MainActor.run {
             self.isStreamReady = true  // Show VideoFrameView with new stream
-            print("🔧 Stream is ready for VideoFrameView")
         }
 
         // Only create analysis stream if in continuous mode
@@ -499,7 +494,6 @@ struct ContentView: View {
         )
 
         if selectedCameraType == .video, let videoURL = selectedVideoURL {
-            print("📹 Starting video frame distribution for: \(videoURL.lastPathComponent)")
             // Video mode - extract frames from video
             await distributeVideoFileFrames(
                 framesToDisplayContinuation: framesToDisplayContinuation,
@@ -507,7 +501,6 @@ struct ContentView: View {
                 videoURL: videoURL
             )
         } else {
-            print("📷 Starting camera frame distribution")
             // Camera mode - attach a stream to the camera
             let frames = AsyncStream<CMSampleBuffer>(bufferingPolicy: .bufferingNewest(1)) {
                 camera.attach(continuation: $0)
@@ -552,8 +545,6 @@ struct ContentView: View {
         framesToAnalyzeContinuation: AsyncStream<CVImageBuffer>.Continuation,
         videoURL: URL
     ) async {
-        print("🎥 Setting up video asset for: \(videoURL.lastPathComponent)")
-        
         // Start accessing security-scoped resource (required for sandboxed apps)
         let accessing = videoURL.startAccessingSecurityScopedResource()
         defer {
@@ -569,20 +560,15 @@ struct ContentView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         
         guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
-            print("❌ Failed to load video tracks")
             framesToDisplayContinuation.finish()
             framesToAnalyzeContinuation.finish()
             return
         }
         
-        print("✅ Found video track: \(track)")
-        
         do {
             let duration = try await asset.load(.duration)
             let timeRange = try await track.load(.timeRange)
             let frameRate = try await track.load(.nominalFrameRate)
-            
-            print("✅ Video loaded - Duration: \(CMTimeGetSeconds(duration))s, Frame rate: \(frameRate)fps")
             
             let frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
             var currentTime = timeRange.start
@@ -596,7 +582,6 @@ struct ContentView: View {
             // Start analysis task in parallel
             async let analyze: () = analyzeVideoFrames(framesToAnalyze)
             
-            print("🔄 Starting video frame extraction loop...")
             var frameCount = 0
             
             // Extract and distribute frames
@@ -605,7 +590,6 @@ struct ContentView: View {
                 while !Task.isCancelled {
                     if currentTime >= CMTimeAdd(timeRange.start, duration) {
                         currentTime = timeRange.start // Loop back to start
-                        print("🔁 Video looped back to start")
                     }
                     
                     do {
@@ -646,12 +630,6 @@ struct ContentView: View {
                             framesToAnalyzeContinuation2.yield(pixelBuffer)
                             
                             frameCount += 1
-                            if frameCount % 30 == 0 {  // Log every 30 frames
-                                print("📊 Processed \(frameCount) frames")
-                                print("📺 Yielded frame \(frameCount) to display stream")
-                            }
-                        } else {
-                            print("⚠️ Failed to create pixel buffer, status: \(status)")
                         }
                         
                         currentTime = CMTimeAdd(currentTime, frameDuration)
@@ -660,12 +638,9 @@ struct ContentView: View {
                         try await Task.sleep(for: FRAME_DELAY)
                         
                     } catch {
-                        print("⚠️ Error extracting frame at time \(CMTimeGetSeconds(currentTime)): \(error)")
                         currentTime = CMTimeAdd(currentTime, frameDuration)
                     }
                 }
-                
-                print("🛑 Video frame extraction stopped")
                 
                 await MainActor.run {
                     self.framesToDisplay = nil
@@ -679,7 +654,6 @@ struct ContentView: View {
             await analyze
             
         } catch {
-            print("❌ Error loading video properties: \(error)")
             framesToDisplayContinuation.finish()
             framesToAnalyzeContinuation.finish()
         }

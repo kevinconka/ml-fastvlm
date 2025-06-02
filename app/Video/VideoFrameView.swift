@@ -82,20 +82,13 @@ public struct VideoFrameView: View {
             if Task.isCancelled {
                 return
             }
-            print("🖼️ VideoFrameView: Starting to listen for frames...")
             var frameCount = 0
             for await frame in frames {
                 if !hold {
                     videoFrame = frame
                     frameCount += 1
-                    if frameCount % 30 == 0 {
-                        print("🖼️ VideoFrameView: Displayed \(frameCount) frames")
-                    }
-                } else {
-                    print("🖼️ VideoFrameView: Frame skipped (hold=true)")
                 }
             }
-            print("🖼️ VideoFrameView: Frame stream ended")
         }
         .onChange(of: cameraType) { _, newType in
             // No matter what, when the user switches to .continuous,
@@ -138,9 +131,6 @@ public struct VideoFrameView: View {
             let context = CIContext()
             if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
                 uiView.layer.contents = cgImage
-                print("🖼️ _ImageView: Successfully rendered CGImage")
-            } else {
-                print("⚠️ _ImageView: Failed to create CGImage from CVImageBuffer")
             }
         }
     }
@@ -163,9 +153,6 @@ public struct VideoFrameView: View {
             let context = CIContext()
             if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
                 uiView.layer?.contents = cgImage
-                print("🖼️ _ImageView: Successfully rendered CGImage")
-            } else {
-                print("⚠️ _ImageView: Failed to create CGImage from CVImageBuffer")
             }
         }
     }

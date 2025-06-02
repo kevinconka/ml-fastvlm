@@ -118,7 +118,7 @@ class FastVLMModel {
                     }
 
                     // Debug: Save the input image before processing
-                    await saveInputImageForDebugging(userInput)
+                    // await saveInputImageForDebugging(userInput)
 
                     let llmStart = Date()
                     let input = try await context.processor.prepare(input: userInput)
