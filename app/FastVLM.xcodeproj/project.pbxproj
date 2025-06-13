@@ -1090,8 +1090,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.21.2;
+				kind = exactVersion;
+				version = 2.21.2;
 			};
 		};
 		C35EDB8A2D07777E00757E80 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
@@ -1106,8 +1106,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/huggingface/swift-transformers";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.1.18;
+				kind = exactVersion;
+				version = 0.1.18;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
